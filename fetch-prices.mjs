@@ -51,7 +51,7 @@ const FUNDS = [
   ["004419", "汇添富美元债债券(QDII)人民币A"],
 ];
 
-import { writeFileSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync } from "node:fs";
 
 const norm = s => String(s).replace(/[ＡａA]$/,"A").replace(/[（(].*?[)）]/g, "").replace(/[指数联接ETF基金债券混合股票LOFQDII\s]/g, "");
 
@@ -165,4 +165,21 @@ writeFileSync("prices.json", JSON.stringify({
   funds,
   fund_issues,
 }, null, 2));
-console.log(`ok: ${Object.keys(result.prices).length} stocks, ${Object.keys(funds).length} funds, ${fund_issues.length} issues`);
+// —— history.json：每日快照追加（供 dashboard 画总资产按天趋势）——
+// 结构 { updated, days:[ { date, prices:{代码:收盘价}, funds:{代码:净值} }, ... ] }
+// 同日重跑覆盖当日；最多保留 750 天
+const bjDate = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10); // 北京时间日期
+let days = [];
+if (existsSync("history.json")) {
+  try { days = JSON.parse(readFileSync("history.json", "utf8")).days || []; } catch (e) {}
+}
+const slimPrices = {}, slimFunds = {};
+for (const c in result.prices) slimPrices[c] = result.prices[c].price;
+for (const c in funds) slimFunds[c] = funds[c].nav;
+days = days.filter(d => d.date !== bjDate);
+days.push({ date: bjDate, prices: slimPrices, funds: slimFunds });
+days.sort((a, b) => (a.date < b.date ? -1 : 1));
+if (days.length > 750) days = days.slice(-750);
+writeFileSync("history.json", JSON.stringify({ updated: new Date().toISOString(), days }));
+
+console.log(`ok: ${Object.keys(result.prices).length} stocks, ${Object.keys(funds).length} funds, ${fund_issues.length} issues, history ${days.length} days`);

@@ -1,7 +1,8 @@
-// Homeport 行情抓取脚本 v2 · 跑在 GitHub Actions 上
+// Homeport 行情抓取脚本 v5 · 跑在 GitHub Actions 上
 // 股票/ETF：东方财富 push2（备用腾讯 GBK）
 // 场外基金净值：天天基金 fundgz（自带名称校验，代码配错会被剔除并列入 fund_issues）
-// 输出 prices.json：{ updated, source, prices:{代码:{name,price}}, funds:{代码:{name,nav,date}}, fund_issues:[] }
+// 红利股周线布林（723撒网用）：东财 push2his 周K → BOLL(20,2) + %B
+// 输出 prices.json：{ updated, source, prices:{代码:{name,price}}, funds:{代码:{name,nav,date}}, boll:{代码:{mid,up,low,pb,close,date}}, fund_issues:[] }
 
 const CODES = [
   ["1", "600036", "招商银行"], ["1", "600887", "伊利股份"], ["1", "600941", "中国移动"],
@@ -12,6 +13,7 @@ const CODES = [
   ["1", "600886", "国投电力"], ["1", "516880", "光伏50"], ["1", "601857", "中国石油"],
   ["1", "601728", "中国电信"], ["1", "600011", "华能国际"], ["1", "600795", "国电电力"],
   ["0", "159934", "黄金ETF易方达"], ["1", "512660", "军工ETF"],
+  ["116", "01024", "快手-W"], // 港股，用于快手RSU估值
 ];
 
 // 场外基金（全部已核实代码，2026-07-11）
@@ -73,14 +75,14 @@ async function fromEastmoney() {
 }
 
 async function fromTencent() {
-  const q = CODES.map(([m, c]) => (m === "1" ? "sh" : "sz") + c).join(",");
+  const q = CODES.map(([m, c]) => (m === "116" ? "hk" : m === "1" ? "sh" : "sz") + c).join(",");
   const res = await fetch(`https://qt.gtimg.cn/q=${q}`, { headers: { "User-Agent": "Mozilla/5.0" } });
   if (!res.ok) throw new Error("tencent http " + res.status);
   const buf = await res.arrayBuffer();
   const text = new TextDecoder("gbk").decode(buf);
   const prices = {};
   for (const line of text.split(";")) {
-    const m = line.match(/v_(?:sh|sz)(\d{6})="([^"]+)"/);
+    const m = line.match(/v_(?:sh|sz|hk)(\d{5,6})="([^"]+)"/);
     if (!m) continue;
     const f = m[2].split("~");
     const p = Number(f[3]);
@@ -128,12 +130,75 @@ async function fetchUsdCny() {
   return null;
 }
 
+async function fetchHkdCny() {
+  try {
+    const res = await fetch("https://push2.eastmoney.com/api/qt/stock/get?fltt=2&secid=133.HKDCNH&fields=f43,f58", { headers: { "User-Agent": "Mozilla/5.0" } });
+    const j = await res.json();
+    let v = Number(j?.data?.f43);
+    if (v > 100) v = v / 10000;
+    if (v > 0.5 && v < 1.5) return Math.round(v * 10000) / 10000;
+  } catch (e) {}
+  return null;
+}
+
+// —— 红利股周线布林（20周·2σ），dashboard 723撒网 弹窗的确认灯用 ——
+// %B = (最新周收盘 − 下轨) / (上轨 − 下轨)：≤0.2 近下轨、≥0.8 近上轨
+const BOLL_SET = new Set([
+  "600036", "600887", "600941", "601919", "601985", "003816", "000538", "600938",
+  "601318", "000423", "600886", "601857", "601728", "600011", "600795",
+]);
+async function weeklyClosesEastmoney(mkt, code) {
+  const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${mkt}.${code}&klt=102&fqt=1&lmt=25&end=20500101&fields1=f1,f2,f3&fields2=f51,f53`;
+  const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+  if (!res.ok) throw new Error("kline http " + res.status);
+  const j = await res.json();
+  const ks = j?.data?.klines;
+  if (!Array.isArray(ks) || ks.length < 20) throw new Error("kline rows " + (ks ? ks.length : 0));
+  return ks.map(l => ({ date: l.split(",")[0], close: Number(l.split(",")[1]) }));
+}
+async function weeklyClosesTencent(mkt, code) {
+  const sym = (mkt === "1" ? "sh" : "sz") + code;
+  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${sym},week,,,25,qfq`;
+  const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+  if (!res.ok) throw new Error("tx kline http " + res.status);
+  const j = await res.json();
+  const d = j?.data?.[sym];
+  const ks = (d && (d.qfqweek || d.week)) || [];
+  if (!Array.isArray(ks) || ks.length < 20) throw new Error("tx kline rows " + ks.length);
+  return ks.map(k => ({ date: k[0], close: Number(k[2]) }));
+}
+async function fetchWeeklyBoll(mkt, code) {
+  let ks;
+  try { ks = await weeklyClosesEastmoney(mkt, code); }
+  catch (e) { ks = await weeklyClosesTencent(mkt, code); }
+  const rows = ks.filter(k => k.close > 0).slice(-20);
+  if (rows.length < 20) throw new Error("bad closes");
+  const closes = rows.map(k => k.close);
+  const mid = closes.reduce((s, v) => s + v, 0) / 20;
+  const sd = Math.sqrt(closes.reduce((s, v) => s + (v - mid) ** 2, 0) / 20);
+  const up = mid + 2 * sd, low = mid - 2 * sd;
+  const last = closes[closes.length - 1];
+  const pb = up > low ? (last - low) / (up - low) : null;
+  return { mid: +mid.toFixed(3), up: +up.toFixed(3), low: +low.toFixed(3),
+    pb: pb == null ? null : +pb.toFixed(3), close: last, date: rows[rows.length - 1].date };
+}
+
 let result;
 try { result = await fromEastmoney(); }
 catch (e) { console.error("eastmoney failed:", e.message); result = await fromTencent(); }
 
+const boll = {};
+for (const [m, c, n] of CODES) {
+  if (!BOLL_SET.has(c)) continue;
+  try { boll[c] = await fetchWeeklyBoll(m, c); }
+  catch (e) { console.warn("boll failed:", c, n, e.message); }
+  await new Promise(r => setTimeout(r, 300));
+}
+
 const usd = await fetchUsdCny();
 if (usd) result.prices["USDT"] = { name: "USDT≈USD/CNH", price: usd };
+const hkd = await fetchHkdCny();
+if (hkd) result.prices["HKD"] = { name: "港币汇率(CNY)", price: hkd };
 
 const funds = {}, fund_issues = [];
 for (const [code, expect] of FUNDS) {
@@ -163,6 +228,7 @@ writeFileSync("prices.json", JSON.stringify({
   source: result.source,
   prices: result.prices,
   funds,
+  boll,
   fund_issues,
 }, null, 2));
 // —— history.json：每日快照追加（供 dashboard 画总资产按天趋势）——
@@ -182,4 +248,4 @@ days.sort((a, b) => (a.date < b.date ? -1 : 1));
 if (days.length > 750) days = days.slice(-750);
 writeFileSync("history.json", JSON.stringify({ updated: new Date().toISOString(), days }));
 
-console.log(`ok: ${Object.keys(result.prices).length} stocks, ${Object.keys(funds).length} funds, ${fund_issues.length} issues, history ${days.length} days`);
+console.log(`ok: ${Object.keys(result.prices).length} stocks, ${Object.keys(funds).length} funds, ${Object.keys(boll).length} boll, ${fund_issues.length} issues, history ${days.length} days`);

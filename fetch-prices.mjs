@@ -203,20 +203,22 @@ if (hkd) result.prices["HKD"] = { name: "港币汇率(CNY)", price: hkd };
 const funds = {}, fund_issues = [];
 for (const [code, expect] of FUNDS) {
   if (!code) { fund_issues.push(`待补代码: ${expect}`); continue; }
-  try {
-    const f = await fetchFundNav(code);
-    if (f.name != null) {
-      const a = norm(f.name), b = norm(expect);
-      if (!(a.includes(b.slice(0, 4)) || b.includes(a.slice(0, 4)))) {
-        fund_issues.push(`名称不匹配: ${code} 预期「${expect}」实际「${f.name}」`);
-        continue;
-      }
-    }
-    funds[code] = { name: expect, api_name: f.name || "(f10无名称校验)", nav: f.nav, date: f.date };
-    await new Promise(r => setTimeout(r, 300));
-  } catch (e) {
-    fund_issues.push(`抓取失败: ${code} ${expect} (${e.message})`);
+  // v5.1: 偶发 fetch failed（008163/004419 常中招）——失败自动重试，最多3次
+  let f = null, lastErr = null;
+  for (let att = 1; att <= 3 && !f; att++) {
+    try { f = await fetchFundNav(code); }
+    catch (e) { lastErr = e; await new Promise(r => setTimeout(r, 1500 * att)); }
   }
+  if (!f) { fund_issues.push(`抓取失败: ${code} ${expect} (${lastErr && lastErr.message})`); continue; }
+  if (f.name != null) {
+    const a = norm(f.name), b = norm(expect);
+    if (!(a.includes(b.slice(0, 4)) || b.includes(a.slice(0, 4)))) {
+      fund_issues.push(`名称不匹配: ${code} 预期「${expect}」实际「${f.name}」`);
+      continue;
+    }
+  }
+  funds[code] = { name: expect, api_name: f.name || "(f10无名称校验)", nav: f.nav, date: f.date };
+  await new Promise(r => setTimeout(r, 300));
 }
 
 const missing = CODES.filter(([, c]) => !result.prices[c]).map(([, c, n]) => `${c} ${n}`);

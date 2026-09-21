@@ -1,6 +1,6 @@
 {
-  "updated": "2026-09-21T14:00:17.809Z",
-  "source": "eastmoney",
+  "updated": "2026-09-21T19:58:37.222Z",
+  "source": "tencent",
   "prices": {
     "159841": {
       "name": "证券ETF天弘",
@@ -97,14 +97,6 @@
     "01024": {
       "name": "快手-W",
       "price": 30.82
-    },
-    "USDT": {
-      "name": "USDT≈USD/CNH",
-      "price": 6.6927
-    },
-    "HKD": {
-      "name": "港币汇率(CNY)",
-      "price": 0.853
     }
   },
   "funds": {

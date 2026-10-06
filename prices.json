@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-06T14:08:50.798Z",
+  "updated": "2026-10-06T20:14:38.847Z",
   "source": "eastmoney",
   "prices": {
     "159841": {
@@ -97,14 +97,6 @@
     "01024": {
       "name": "快手-W",
       "price": 30.18
-    },
-    "USDT": {
-      "name": "USDT≈USD/CNH",
-      "price": 6.703
-    },
-    "HKD": {
-      "name": "港币汇率(CNY)",
-      "price": 0.8541
     }
   },
   "funds": {

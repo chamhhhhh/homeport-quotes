@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-13T14:58:20.206Z",
+  "updated": "2026-10-13T20:39:10.383Z",
   "source": "eastmoney",
   "prices": {
     "159841": {
@@ -100,7 +100,7 @@
     },
     "USDT": {
       "name": "USDT≈USD/CNH",
-      "price": 6.6929
+      "price": 6.6931
     },
     "HKD": {
       "name": "港币汇率(CNY)",
